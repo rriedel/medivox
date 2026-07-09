@@ -1,3 +1,5 @@
+from typing import Any
+
 import numpy as np
 import sounddevice as sd
 
@@ -11,7 +13,13 @@ class Recorder:
         self._frames: list[np.ndarray] = []
         self._stream: sd.InputStream | None = None
 
-    def _callback(self, indata, frames, time_info, status) -> None:
+    def _callback(
+        self,
+        indata: np.ndarray,
+        frames: int,
+        time_info: Any,
+        status: sd.CallbackFlags,
+    ) -> None:
         self._frames.append(indata.copy())
 
     def start(self) -> None:

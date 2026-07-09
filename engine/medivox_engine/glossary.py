@@ -4,7 +4,7 @@ from pathlib import Path
 def load_glossary(path: Path) -> list[str]:
     if not path.exists():
         return []
-    terms = []
+    terms: list[str] = []
     for line in path.read_text(encoding="utf-8").splitlines():
         term = line.strip()
         if term and not term.startswith("#"):

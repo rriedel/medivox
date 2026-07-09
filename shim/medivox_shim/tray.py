@@ -12,7 +12,7 @@ def _make_icon(color: str) -> Image.Image:
 
 
 class TrayIcon:
-    def __init__(self, on_quit: Callable) -> None:
+    def __init__(self, on_quit: Callable[[pystray.Icon, pystray.MenuItem], None]) -> None:
         self._icon = pystray.Icon(
             "medivox",
             _make_icon("gray"),

@@ -1,5 +1,7 @@
 import sys
 
+import pystray
+
 from . import client
 from .audio import Recorder
 from .config import config
@@ -10,7 +12,7 @@ from .tray import TrayIcon
 
 def main() -> None:
     recorder = Recorder()
-    state = {"recording": False}
+    state: dict[str, bool] = {"recording": False}
 
     def on_toggle() -> None:
         if not state["recording"]:
@@ -32,7 +34,7 @@ def main() -> None:
         if text:
             type_text(text)
 
-    def on_quit(icon, item) -> None:
+    def on_quit(icon: pystray.Icon, item: pystray.MenuItem) -> None:
         hotkey.stop()
         tray.stop()
 

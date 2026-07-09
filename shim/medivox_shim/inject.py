@@ -41,7 +41,7 @@ def type_text(text: str) -> None:
     """
     if not text:
         return
-    inputs = []
+    inputs: list[INPUT] = []
     for char in text:
         if char == "\n":
             char = "\r"
