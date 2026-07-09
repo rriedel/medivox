@@ -1,0 +1,10 @@
+# Ein Fachbegriff pro Zeile. Zeilen mit '#' werden ignoriert.
+# Beispiele -- durch echtes medizinisches Vokabular ersetzen/erweitern.
+Anamnese
+Auskultation
+Tachykardie
+Bradykardie
+Dyspnoe
+Hypertonie
+Antikoagulation
+Sonographie

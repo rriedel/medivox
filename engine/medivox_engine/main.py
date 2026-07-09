@@ -1,0 +1,37 @@
+import numpy as np
+import uvicorn
+from fastapi import FastAPI, Request
+from fastapi.responses import PlainTextResponse
+
+from .config import config
+from .transcription import TranscriptionEngine
+
+app = FastAPI(title="medivox-engine")
+engine: TranscriptionEngine | None = None
+
+
+@app.on_event("startup")
+def startup() -> None:
+    global engine
+    engine = TranscriptionEngine()
+
+
+@app.post("/transcribe", response_class=PlainTextResponse)
+async def transcribe(request: Request) -> str:
+    raw = await request.body()
+    audio = np.frombuffer(raw, dtype=np.float32)
+    return engine.transcribe(audio)
+
+
+@app.post("/reload-glossary")
+def reload_glossary() -> dict:
+    engine.reload_glossary()
+    return {"status": "reloaded"}
+
+
+def run() -> None:
+    uvicorn.run(app, host=config.host, port=config.port)
+
+
+if __name__ == "__main__":
+    run()
