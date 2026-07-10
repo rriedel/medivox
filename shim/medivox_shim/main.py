@@ -1,6 +1,7 @@
 import sys
 
 import pystray
+from pystray._base import Icon as PystrayIcon
 
 from . import client
 from .audio import Recorder
@@ -34,7 +35,7 @@ def main() -> None:
         if text:
             type_text(text)
 
-    def on_quit(icon: pystray.Icon, item: pystray.MenuItem) -> None:
+    def on_quit(icon: PystrayIcon, item: pystray.MenuItem) -> None:
         hotkey.stop()
         tray.stop()
 

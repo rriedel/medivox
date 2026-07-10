@@ -2,6 +2,7 @@ from typing import Callable
 
 import pystray
 from PIL import Image, ImageDraw
+from pystray._base import Icon as PystrayIcon
 
 
 def _make_icon(color: str) -> Image.Image:
@@ -12,7 +13,7 @@ def _make_icon(color: str) -> Image.Image:
 
 
 class TrayIcon:
-    def __init__(self, on_quit: Callable[[pystray.Icon, pystray.MenuItem], None]) -> None:
+    def __init__(self, on_quit: Callable[[PystrayIcon, pystray.MenuItem], None]) -> None:
         self._icon = pystray.Icon(
             "medivox",
             _make_icon("gray"),
