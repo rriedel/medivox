@@ -1,4 +1,4 @@
-import sys
+import logging
 
 import pystray
 from pystray._base import Icon as PystrayIcon
@@ -8,10 +8,14 @@ from .audio import Recorder
 from .config import config
 from .hotkey import GlobalHotkey
 from .inject import type_text
+from .logging_config import configure_logging
 from .tray import TrayIcon
+
+logger = logging.getLogger(__name__)
 
 
 def main() -> None:
+    configure_logging(config.log_level)
     recorder = Recorder()
     state: dict[str, bool] = {"recording": False}
 
@@ -29,9 +33,10 @@ def main() -> None:
             return
         try:
             text = client.transcribe(audio)
-        except Exception as exc:  # Netzwerk-/Engine-Fehler nicht die Anwendung abstuerzen lassen
-            print(f"Transkription fehlgeschlagen: {exc}", file=sys.stderr)
+        except Exception:  # Netzwerk-/Engine-Fehler nicht die Anwendung abstuerzen lassen
+            logger.exception("Transkription fehlgeschlagen")
             return
+        logger.info("Transkriptionsergebnis: %s", text)
         if text:
             type_text(text)
 

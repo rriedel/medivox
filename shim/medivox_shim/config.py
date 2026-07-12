@@ -17,6 +17,7 @@ class ShimConfig:
     hotkey_modifiers: int = MOD_SHIFT | MOD_CONTROL
     hotkey_vk: int = VK_SPACE
     request_timeout_seconds: int = 60
+    log_level: str = "INFO"
 
 
 config = ShimConfig()
