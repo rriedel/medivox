@@ -1,3 +1,6 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 import numpy as np
 import uvicorn
 from fastapi import FastAPI, Request
@@ -6,14 +9,17 @@ from fastapi.responses import PlainTextResponse
 from .config import config
 from .transcription import TranscriptionEngine
 
-app = FastAPI(title="medivox-engine")
 engine: TranscriptionEngine | None = None
 
 
-@app.on_event("startup")
-def startup() -> None:
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     global engine
     engine = TranscriptionEngine()
+    yield
+
+
+app = FastAPI(title="medivox-engine", lifespan=lifespan)
 
 
 def _get_engine() -> TranscriptionEngine:
