@@ -5,7 +5,18 @@ INPUT_KEYBOARD = 1
 KEYEVENTF_UNICODE = 0x0004
 KEYEVENTF_KEYUP = 0x0002
 
-user32 = ctypes.windll.user32
+user32 = ctypes.WinDLL("user32", use_last_error=True)
+
+
+class MOUSEINPUT(ctypes.Structure):
+    _fields_ = [
+        ("dx", wintypes.LONG),
+        ("dy", wintypes.LONG),
+        ("mouseData", wintypes.DWORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.POINTER(wintypes.ULONG)),
+    ]
 
 
 class KEYBDINPUT(ctypes.Structure):
@@ -18,8 +29,23 @@ class KEYBDINPUT(ctypes.Structure):
     ]
 
 
+class HARDWAREINPUT(ctypes.Structure):
+    _fields_ = [
+        ("uMsg", wintypes.DWORD),
+        ("wParamL", wintypes.WORD),
+        ("wParamH", wintypes.WORD),
+    ]
+
+
 class _InputUnion(ctypes.Union):
-    _fields_ = [("ki", KEYBDINPUT)]
+    # mi/hi werden nie benutzt, muessen aber Teil des Union sein: Windows berechnet
+    # sizeof(INPUT) anhand der echten API-Struktur (inkl. MOUSEINPUT/HARDWAREINPUT) und
+    # verweigert den Aufruf mit ERROR_INVALID_PARAMETER, wenn cbSize davon abweicht.
+    _fields_ = [
+        ("mi", MOUSEINPUT),
+        ("ki", KEYBDINPUT),
+        ("hi", HARDWAREINPUT),
+    ]
 
 
 class INPUT(ctypes.Structure):
@@ -48,6 +74,10 @@ def type_text(text: str) -> None:
         inputs.append(_char_input(char, key_up=False))
         inputs.append(_char_input(char, key_up=True))
     array = (INPUT * len(inputs))(*inputs)
+    ctypes.set_last_error(0)
     sent = user32.SendInput(len(inputs), array, ctypes.sizeof(INPUT))
     if sent != len(inputs):
-        raise OSError("SendInput konnte nicht alle Eingaben zustellen.")
+        error = ctypes.WinError(ctypes.get_last_error())
+        raise OSError(
+            f"SendInput hat nur {sent} von {len(inputs)} Eingaben zugestellt: {error}"
+        )

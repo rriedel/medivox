@@ -37,8 +37,12 @@ def main() -> None:
             logger.exception("Transkription fehlgeschlagen")
             return
         logger.info("Transkriptionsergebnis: %s", text)
-        if text:
+        if not text:
+            return
+        try:
             type_text(text)
+        except OSError:
+            logger.exception("Texteingabe fehlgeschlagen")
 
     def on_quit(icon: PystrayIcon, item: pystray.MenuItem) -> None:
         hotkey.stop()
