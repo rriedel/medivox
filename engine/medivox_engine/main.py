@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse
 
 from .config import config
+from .logging_config import configure_logging
 from .transcription import TranscriptionEngine
 
 engine: TranscriptionEngine | None = None
@@ -15,6 +16,7 @@ engine: TranscriptionEngine | None = None
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     global engine
+    configure_logging(config.log_level)
     engine = TranscriptionEngine()
     yield
 

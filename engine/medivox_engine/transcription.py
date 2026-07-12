@@ -1,8 +1,12 @@
+import logging
+
 import numpy as np
 from faster_whisper import WhisperModel
 
 from .config import config
 from .glossary import build_initial_prompt, load_glossary
+
+logger = logging.getLogger(__name__)
 
 
 class TranscriptionEngine:
@@ -25,4 +29,6 @@ class TranscriptionEngine:
             initial_prompt=self._initial_prompt or None,
             vad_filter=False,
         )
-        return "".join(segment.text for segment in segments).strip()
+        result = "".join(segment.text for segment in segments).strip()
+        logger.info("Transkriptionsergebnis: %s", result)
+        return result

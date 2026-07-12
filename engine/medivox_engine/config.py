@@ -13,6 +13,7 @@ class EngineConfig:
     port: int = 8123
     sample_rate: int = 16000
     glossary_path: Path = Path(__file__).resolve().parent.parent / "glossary.txt"
+    log_level: str = "INFO"
 
 
 config = EngineConfig()
