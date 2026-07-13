@@ -33,16 +33,16 @@ def main() -> None:
             return
         try:
             text = client.transcribe(audio)
-        except Exception:  # Netzwerk-/Engine-Fehler nicht die Anwendung abstuerzen lassen
-            logger.exception("Transkription fehlgeschlagen")
+        except Exception as ex:  # Netzwerk-/Engine-Fehler nicht die Anwendung abstuerzen lassen
+            logger.error(f"Transkription fehlgeschlagen: {str(ex)}")
             return
-        logger.info("Transkriptionsergebnis: %s", text)
+        logger.info(f"Transkriptionsergebnis: {text}")
         if not text:
             return
         try:
             type_text(text)
-        except OSError:
-            logger.exception("Texteingabe fehlgeschlagen")
+        except OSError as osex:
+            logger.exception(f"Texteingabe fehlgeschlagen: {str(osex)}")
 
     def on_quit(icon: PystrayIcon, item: pystray.MenuItem) -> None:
         hotkey.stop()
@@ -53,6 +53,8 @@ def main() -> None:
 
     hotkey.start()
     tray.run_detached()
+    logger.info(f"Hotkey installed, ready for activation")
+    logger.info(f"to stop, use tray icon!")
     hotkey.join()
 
 

@@ -14,7 +14,7 @@ class ShimConfig:
     engine_port: int = 8123
     sample_rate: int = 16000
     # Standard-Hotkey zum Umschalten: Strg+Alt+Leertaste
-    hotkey_modifiers: int = MOD_SHIFT | MOD_CONTROL
+    hotkey_modifiers: int = MOD_ALT | MOD_CONTROL
     hotkey_vk: int = VK_SPACE
     request_timeout_seconds: int = 60
     log_level: str = "INFO"
