@@ -16,6 +16,12 @@ dist/
 *.egg-info/
 .eggs/
 
+# .NET
+bin/
+obj/
+publish/
+**/installer/output/
+
 # Environment / secrets
 .env
 .env.*
