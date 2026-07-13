@@ -1,15 +1,27 @@
 # medivox
 
 Lokale Spracherkennung fuer medizinisches Diktat unter Windows. Besteht aus zwei
-unabhaengigen Teilprojekten mit jeweils eigener virtueller Umgebung:
+Teilen:
 
 - **engine** -- FastAPI-Server, der Audio per [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
   transkribiert.
 - **shim** -- Windows-Tray-Anwendung, die per globalem Hotkey Audio aufnimmt, an die
   Engine schickt und den erkannten Text ins fokussierte Fenster eintippt.
 
-Voraussetzung: Python 3.12, Windows (der Shim nutzt `ctypes`/`user32` und ist
-nicht plattformunabhaengig).
+Voraussetzung: Windows (jeder Shim nutzt `user32`/`SendInput` und ist nicht
+plattformunabhaengig), Python 3.12 fuer die Engine.
+
+### Shim-Varianten
+
+Den Shim gibt es dreimal, funktional gleichwertig und gegeneinander austauschbar -- alle
+sprechen dieselbe Engine-Schnittstelle. Es kann immer nur **einer gleichzeitig** laufen:
+`RegisterHotKey` ist systemweit exklusiv.
+
+| Verzeichnis | Sprache | Groesse | RAM (Leerlauf) |
+|---|---|---|---|
+| [`shim/`](shim/) | Python 3.12 (Original) | venv | -- |
+| [`shim-dotnet/`](shim-dotnet/) | C# / .NET 8 ([README](shim-dotnet/README.md)) | 68,5 MB (self-contained) | ~117 MB |
+| [`shim-rust/`](shim-rust/) | Rust ([README](shim-rust/README.md)) | 2,0 MB (nativ) | ~15 MB |
 
 ## engine
 

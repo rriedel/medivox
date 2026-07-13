@@ -22,6 +22,9 @@ obj/
 publish/
 **/installer/output/
 
+# Rust
+target/
+
 # Environment / secrets
 .env
 .env.*
