@@ -1,4 +1,5 @@
 import logging
+import time
 
 import numpy as np
 from faster_whisper import WhisperModel
@@ -23,6 +24,7 @@ class TranscriptionEngine:
         self._initial_prompt = build_initial_prompt(load_glossary(config.glossary_path))
 
     def transcribe(self, audio: np.ndarray) -> str:
+        start = time.perf_counter()
         segments, _ = self._model.transcribe(
             audio,
             language=config.language,
@@ -30,5 +32,6 @@ class TranscriptionEngine:
             vad_filter=False,
         )
         result = "".join(segment.text for segment in segments).strip()
-        logger.info("Transkriptionsergebnis: %s", result)
+        elapsed = time.perf_counter() - start
+        logger.info("transkription (%.3fs): %s", elapsed, result)
         return result
