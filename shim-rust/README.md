@@ -5,7 +5,8 @@ Rust-Neuimplementierung des Windows-Tray-Shims -- Schwesterprojekt zu `../shim-d
 sprechen dieselbe Engine-Schnittstelle (`../engine`, `POST /transcribe`, rohe
 float32-PCM-Samples @ 16 kHz mono -> Plaintext). Siehe Root-README fuer den Gesamtkontext.
 
-Voraussetzung: Rust (stable, `x86_64-pc-windows-msvc`), Windows.
+Voraussetzung: Windows, Rust (stable, `x86_64-pc-windows-msvc`) samt MSVC-Buildumgebung --
+Installationsanleitung siehe [Voraussetzungen installieren](#voraussetzungen-installieren).
 
 Hotkey **Strg+Alt+Leertaste** startet/stoppt die Aufnahme (Tray-Icon wird rot waehrend
 der Aufnahme), die Aufnahme geht an die Engine und der erkannte Text wird ins fokussierte
@@ -15,6 +16,39 @@ Fenster eingetippt.
 > .NET- oder Python-Shim bereits mit demselben Hotkey, scheitert der Start hier mit einem
 > Fehler im Log. Zum parallelen Betrieb den Hotkey per `MEDIVOX_HOTKEY` umbiegen
 > (z. B. `MEDIVOX_HOTKEY=Control+Shift+Space`).
+
+## Voraussetzungen installieren
+
+Einmalig pro Rechner. Es werden zwei Dinge gebraucht:
+
+1. **MSVC-Buildumgebung** -- das Standard-Rust-Target `x86_64-pc-windows-msvc` linkt gegen
+   den MSVC-Linker (`link.exe`) und braucht das Windows SDK. Beides steckt in den Visual
+   Studio Build Tools; eine vollstaendige Visual-Studio-Installation ist nicht noetig.
+2. **Rust** via `rustup`.
+
+Am einfachsten per [winget](https://learn.microsoft.com/windows/package-manager/) (in
+Windows 11 vorinstalliert):
+
+```powershell
+# 1. Build Tools mit C++-Workload und Windows SDK (~3-4 GB, laeuft einige Minuten)
+winget install --id Microsoft.VisualStudio.2022.BuildTools `
+  --override "--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+
+# 2. Rust (rustup + stable-Toolchain). Erst NACH den Build Tools ausfuehren,
+#    sonst kann rustup-init die MSVC-Umgebung nicht finden.
+winget install --id Rustlang.Rustup
+```
+
+Danach eine **neue** PowerShell oeffnen (damit `%USERPROFILE%\.cargo\bin` im PATH ist) und
+pruefen:
+
+```powershell
+rustup default stable   # falls noch keine aktive Toolchain gesetzt ist
+rustc --version         # sollte z. B. "rustc 1.97.0 ..." zeigen
+```
+
+Alternativen ohne winget: Build Tools als [Standalone-Installer](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022)
+(Workload "Desktopentwicklung mit C++"), Rust ueber [rustup.rs](https://rustup.rs/).
 
 ## Entwicklung
 
