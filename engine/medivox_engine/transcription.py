@@ -29,7 +29,13 @@ class TranscriptionEngine:
             audio,
             language=config.language,
             initial_prompt=self._initial_prompt or None,
-            vad_filter=False,
+            beam_size=config.beam_size,
+            best_of=config.best_of,
+            temperature=config.temperature,
+            without_timestamps=config.without_timestamps,
+            condition_on_previous_text=config.condition_on_previous_text,
+            vad_filter=config.vad_filter,
+            vad_parameters={"min_silence_duration_ms": config.vad_min_silence_duration_ms},
         )
         result = "".join(segment.text for segment in segments).strip()
         elapsed = time.perf_counter() - start

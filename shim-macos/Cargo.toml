@@ -1,0 +1,26 @@
+[package]
+name = "medivox-shim-macos"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "medivox-shim"
+path = "src/main.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+[dependencies]
+anyhow = "1.0.103"
+core-graphics = "0.24.0"
+cpal = "0.18.1"
+global-hotkey = "0.8.0"
+rubato = "4.0.0"
+tao = "0.30.8"
+tracing = "0.1.44"
+tracing-appender = "0.2.5"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+tray-icon = "0.24.1"
+ureq = { version = "2", default-features = false }
