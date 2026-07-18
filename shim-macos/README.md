@@ -22,6 +22,11 @@ konfigurierbarer Audio-Overlap verwendet.
 Zum Qualitaetsvergleich kann Pseudo-Streaming komplett deaktiviert werden; dann wird wieder die
 gesamte Aufnahme erst beim Stop transkribiert.
 
+Wichtig fuer den geplanten Windows-Port: Die gesamte Engine-Ansteuerung (Pseudo-Streaming,
+Overlap, Min-Audio, Metrik-Logging, Chunk-Finalisierung) ist explizit im Modul
+`src/transcription_flow.rs` gebuendelt. `main.rs` enthaelt nur noch plattformspezifische
+Laufzeitlogik (Eventloop, Hotkey, Tray, Rechte).
+
 > **Nur ein Shim gleichzeitig pro Rechner.** Der globale Hotkey ist systemweit exklusiv.
 > Zum Umbiegen `MEDIVOX_HOTKEY` setzen (z. B. `MEDIVOX_HOTKEY=Control+Shift+Space`).
 
@@ -123,6 +128,7 @@ unveraendert uebernommen.
 | Datei | Zweck | Herkunft |
 |---|---|---|
 | `main.rs` | Entry Point, tao-Eventloop, Aufnahme-/Transkriptions-Ablauf | macOS-spezifisch (Eventloop statt Win32-Message-Loop) |
+| `transcription_flow.rs` | Portierbare Engine-Ansteuerung inkl. Pseudo-Streaming + Metriken | plattformneutral, fuer Windows-Port vorgesehen |
 | `recorder.rs` | CoreAudio-Aufnahme (`cpal`), Downmix + Resampling auf 16 kHz (`rubato`) | unveraendert von `shim-rust` |
 | `inject.rs` | `CGEventPost` fuer Unicode-Texteingabe (`core-graphics`) | macOS-spezifisch (Pendant zu SendInput) |
 | `tray.rs` | Menueleisten-Icon + Menue (`tray-icon`), Icons zur Laufzeit gezeichnet | unveraendert von `shim-rust` |

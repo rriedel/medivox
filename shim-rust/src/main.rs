@@ -15,10 +15,12 @@ mod config;
 mod inject;
 mod logging;
 mod recorder;
+mod transcription_flow;
 mod tray;
 
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use global_hotkey::hotkey::HotKey;
@@ -29,7 +31,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use client::EngineClient;
+use config::SAMPLE_RATE;
 use recorder::Recorder;
+use transcription_flow::{FlowConfig, TranscriptionFlow};
 use tray::Tray;
 
 fn main() -> Result<()> {
@@ -56,9 +60,31 @@ fn run() -> Result<()> {
     let engine = Arc::new(EngineClient::new());
     let mut recorder = Recorder::new();
     let mut recording = false;
+    let pseudo_streaming_enabled = config::pseudo_streaming_enabled();
+    let chunk_interval = Duration::from_millis(config::stream_chunk_ms());
+    let min_audio_ms = config::stream_min_audio_ms();
+    let min_chunk_samples = ((SAMPLE_RATE as u64 * min_audio_ms) / 1_000) as usize;
+    let overlap_ms = config::stream_overlap_ms();
+    let overlap_samples = ((SAMPLE_RATE as u64 * overlap_ms) / 1_000) as usize;
+    let mut flow = TranscriptionFlow::new(FlowConfig {
+        pseudo_streaming_enabled,
+        chunk_interval,
+        min_chunk_samples,
+        min_audio_ms,
+        overlap_ms,
+        overlap_samples,
+    });
 
     tracing::info!("Hotkey installed ({spec}), ready for activation");
     tracing::info!("to stop, use tray icon!");
+    if flow.config().pseudo_streaming_enabled {
+        tracing::info!(
+            "Pseudo-Streaming konfiguriert: Tick {} ms, Min-Audio {} ms, Overlap {} ms",
+            flow.config().chunk_interval.as_millis(),
+            flow.config().min_audio_ms,
+            flow.config().overlap_ms
+        );
+    }
 
     let hotkey_rx = GlobalHotKeyEvent::receiver();
     let menu_rx = MenuEvent::receiver();
@@ -78,7 +104,11 @@ fn run() -> Result<()> {
                 continue;
             }
             recording = !recording;
-            on_hotkey(recording, &tray, &mut recorder, &engine);
+            on_hotkey(recording, &tray, &mut recorder, &engine, &mut flow);
+        }
+
+        if recording {
+            flow.process_tick(&mut recorder, &engine);
         }
 
         while let Ok(event) = menu_rx.try_recv() {
@@ -95,10 +125,19 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-fn on_hotkey(recording: bool, tray: &Tray, recorder: &mut Recorder, engine: &Arc<EngineClient>) {
+fn on_hotkey(
+    recording: bool,
+    tray: &Tray,
+    recorder: &mut Recorder,
+    engine: &Arc<EngineClient>,
+    flow: &mut TranscriptionFlow,
+) {
     if recording {
         match recorder.start() {
-            Ok(()) => tray.set_recording(true),
+            Ok(()) => {
+                tray.set_recording(true);
+                flow.on_recording_started();
+            }
             Err(err) => tracing::error!("Aufnahme konnte nicht starten: {err:#}"),
         }
         return;
@@ -116,25 +155,6 @@ fn on_hotkey(recording: bool, tray: &Tray, recorder: &mut Recorder, engine: &Arc
         return;
     }
 
-    // Transkription + Texteingabe laufen abseits der Message-Loop, damit der Tray waehrend
-    // der Engine-Anfrage nicht blockiert (.NET-Pendant: das fire-and-forget-Task in
-    // HandleTranscriptionAsync). SendInput ist threadunabhaengig.
-    let engine = Arc::clone(engine);
-    std::thread::spawn(move || {
-        let text = match engine.transcribe(&audio) {
-            Ok(text) => text,
-            Err(err) => {
-                tracing::error!("Transkription fehlgeschlagen: {err:#}");
-                return;
-            }
-        };
-
-        tracing::info!("Transkriptionsergebnis: {text}");
-        if text.is_empty() {
-            return;
-        }
-        if let Err(err) = inject::type_text(&text) {
-            tracing::error!("Texteingabe fehlgeschlagen: {err:#}");
-        }
-    });
+    // Transkription + Texteingabe laufen weiterhin abseits der Message-Loop.
+    flow.spawn_stop_transcription(audio, Arc::clone(engine), inject::type_text);
 }

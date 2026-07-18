@@ -12,6 +12,10 @@ Hotkey **Strg+Alt+Leertaste** startet/stoppt die Aufnahme (Tray-Icon wird rot wa
 der Aufnahme), die Aufnahme geht an die Engine und der erkannte Text wird ins fokussierte
 Fenster eingetippt.
 
+Wichtig fuer die Weiterentwicklung: Die Engine-Ansteuerung ist jetzt explizit in
+`src/transcription_flow.rs` gekapselt. `main.rs` enthaelt nur noch den
+plattformspezifischen Runtime-Teil (Win32-Message-Loop, Hotkey, Tray).
+
 > **Nur ein Shim gleichzeitig.** `RegisterHotKey` ist systemweit exklusiv: laeuft der
 > .NET- oder Python-Shim bereits mit demselben Hotkey, scheitert der Start hier mit einem
 > Fehler im Log. Zum parallelen Betrieb den Hotkey per `MEDIVOX_HOTKEY` umbiegen
@@ -61,7 +65,13 @@ Logs landen unter `%LocalAppData%\Medivox\logs` (Praefix `shim-rs-`, taeglich ro
 14 Tage Aufbewahrung) -- derselbe Ordner wie beim .NET-Shim, aber eigener Dateiname.
 
 Env-Vars: `MEDIVOX_ENGINE_HOST` / `MEDIVOX_ENGINE_PORT` (Standard `127.0.0.1` / `8123`),
-`MEDIVOX_LOG_LEVEL` (Standard `info`), `MEDIVOX_HOTKEY` (Standard `Control+Alt+Space`).
+`MEDIVOX_LOG_LEVEL` (Standard `info`), `MEDIVOX_HOTKEY` (Standard `Control+Alt+Space`),
+`MEDIVOX_PSEUDO_STREAMING` (Standard `false`), `MEDIVOX_STREAM_CHUNK_MS`,
+`MEDIVOX_STREAM_OVERLAP_MS`, `MEDIVOX_STREAM_MIN_AUDIO_MS`.
+
+Hinweis: Im Windows-Rust-Shim bleibt das Verhalten aktuell bewusst bei Full-Utterance.
+Pseudo-Streaming-Parameter sind als kompatible Schnittstelle bereits vorhanden, damit die
+Streaming-Logik aus `shim-macos/src/transcription_flow.rs` spaeter 1:1 portiert werden kann.
 
 ## Release-Build
 
@@ -79,6 +89,7 @@ Die Module entsprechen 1:1 denen des .NET-Shims, um den Vergleich einfach zu hal
 | Datei | Zweck | .NET-Pendant |
 |---|---|---|
 | `main.rs` | Entry Point, Win32-Message-Loop, Aufnahme-/Transkriptions-Ablauf | `Program.cs` + `TrayApplicationContext.cs` |
+| `transcription_flow.rs` | Portierbare Engine-Ansteuerung + Metrik-Logging (aktuell Full-Utterance) | vorbereitet fuer Streaming-Port |
 | `tray.rs` | Tray-Icon + Kontextmenue (`tray-icon`), Icons zur Laufzeit gezeichnet | `TrayApplicationContext.cs` |
 | `recorder.rs` | WASAPI-Aufnahme (`cpal`), Downmix + Resampling auf 16 kHz (`rubato`) | `Recorder.cs` (NAudio) |
 | `inject.rs` | `SendInput` fuer Unicode-Texteingabe (`windows`) | `TextInjector.cs` |
