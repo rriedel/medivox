@@ -83,6 +83,47 @@ Env-Vars: `MEDIVOX_ENGINE_HOST` / `MEDIVOX_ENGINE_PORT` (Standard `127.0.0.1` / 
 `MEDIVOX_STREAM_HOLDBACK_TOKENS` (Standard `4`, Bereich `0..20`),
 `MEDIVOX_STREAM_PREVIEW_ENABLED` (Standard `true`, Werte z. B. `true/false`, `on/off`).
 
+### Quick Tuning Guide
+
+Fuer den Einstieg helfen diese zwei Profile. Danach am besten nur einen Parameter
+pro Testlauf aendern und kurz gegen denselben Beispieltext vergleichen.
+
+**Profil A: Niedrige Latenz (mehr Live-Feeling, etwas mehr Fluktuation)**
+
+- `MEDIVOX_STREAM_TICK_MS=700`
+- `MEDIVOX_STREAM_WINDOW_MS=9000`
+- `MEDIVOX_STREAM_MIN_TRANSCRIBE_MS=1800`
+- `MEDIVOX_STREAM_STABLE_PASSES=2`
+- `MEDIVOX_STREAM_HOLDBACK_TOKENS=3`
+- `MEDIVOX_STREAM_PREVIEW_ENABLED=true`
+
+Einsatz: Diktat mit kurzen Pausen, wenn schneller Textfluss wichtiger ist als
+maximal ruhige Zwischenresultate.
+
+**Profil B: Hohe Stabilitaet (ruhiger Text, etwas mehr Verzoegerung)**
+
+- `MEDIVOX_STREAM_TICK_MS=1400`
+- `MEDIVOX_STREAM_WINDOW_MS=14000`
+- `MEDIVOX_STREAM_MIN_TRANSCRIBE_MS=3500`
+- `MEDIVOX_STREAM_STABLE_PASSES=3`
+- `MEDIVOX_STREAM_HOLDBACK_TOKENS=5`
+- `MEDIVOX_STREAM_PREVIEW_ENABLED=true`
+
+Einsatz: Lange Saetze, Fachbegriffe, moeglichst wenig Korrekturen waehrend der
+laufenden Aufnahme.
+
+Wenn Kantenartefakte oder Wiederholungen auffallen:
+
+- `MEDIVOX_STREAM_WINDOW_MS` leicht erhoehen (z. B. +2000 ms)
+- `MEDIVOX_STREAM_HOLDBACK_TOKENS` um 1-2 erhoehen
+- `MEDIVOX_STREAM_STABLE_PASSES` um 1 erhoehen
+
+Wenn das Ergebnis zu spaet kommt:
+
+- `MEDIVOX_STREAM_TICK_MS` senken
+- `MEDIVOX_STREAM_MIN_TRANSCRIBE_MS` senken
+- `MEDIVOX_STREAM_WINDOW_MS` moderat senken
+
 Der Shim loggt fuer jeden Engine-Request Metriken mit `transcribe_metrics`:
 `kind` (`window`, `final_window`, `full`), `audio_s`, `elapsed_s`, `rtf`, `chars`.
 Das laufende, stabilisierte Zwischenresultat erscheint als `transcribe_preview`.
