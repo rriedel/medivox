@@ -66,31 +66,39 @@ fn run() -> Result<()> {
     let mut recorder = Recorder::new();
     let mut recording = false;
     let pseudo_streaming_enabled = config::pseudo_streaming_enabled();
-    let chunk_interval = Duration::from_millis(config::stream_chunk_ms());
-    let min_audio_ms = config::stream_min_audio_ms();
-    let min_chunk_samples = ((SAMPLE_RATE as u64 * min_audio_ms) / 1_000) as usize;
-    let overlap_ms = config::stream_overlap_ms();
-    let overlap_samples = ((SAMPLE_RATE as u64 * overlap_ms) / 1_000) as usize;
+    let tick_ms = config::stream_tick_ms();
+    let chunk_interval = Duration::from_millis(tick_ms);
+    let window_ms = config::stream_window_ms();
+    let ring_buffer_ms = config::stream_ring_buffer_ms();
+    let min_transcribe_ms = config::stream_min_transcribe_ms();
+    let stable_passes = config::stream_stable_passes();
+    let holdback_tokens = config::stream_holdback_tokens();
+    let preview_enabled = config::stream_preview_enabled();
     let mut flow = TranscriptionFlow::new(FlowConfig {
         pseudo_streaming_enabled,
         chunk_interval,
-        min_chunk_samples,
-        min_audio_ms,
-        overlap_ms,
-        overlap_samples,
+        window_samples: ((SAMPLE_RATE as u64 * window_ms) / 1_000) as usize,
+        ring_capacity_samples: ((SAMPLE_RATE as u64 * ring_buffer_ms) / 1_000) as usize,
+        min_transcribe_samples: ((SAMPLE_RATE as u64 * min_transcribe_ms) / 1_000) as usize,
+        stable_passes,
+        holdback_tokens,
+        preview_enabled,
     });
 
     tracing::info!("Hotkey installed ({spec}), ready for activation");
     tracing::info!("to stop, use tray icon!");
     if flow.config().pseudo_streaming_enabled {
         tracing::info!(
-            "Pseudo-Streaming aktiv: Tick {} ms, Min-Audio {} ms, Overlap {} ms",
+            "Window-Streaming aktiv: Tick {} ms, Fenster {} ms, Ringpuffer {} ms, Stabilitaet {}x, Holdback {}",
             flow.config().chunk_interval.as_millis(),
-            flow.config().min_audio_ms,
-            flow.config().overlap_ms
+            window_ms,
+            ring_buffer_ms,
+            flow.config().stable_passes,
+            flow.config().holdback_tokens
         );
+        tracing::info!("Live-Preview: {}", if flow.config().preview_enabled { "an" } else { "aus" });
     } else {
-        tracing::info!("Pseudo-Streaming deaktiviert: ganze Aufnahme wird am Ende transkribiert");
+        tracing::info!("Streaming deaktiviert: ganze Aufnahme wird am Ende transkribiert");
     }
 
     let hotkey_rx = GlobalHotKeyEvent::receiver();

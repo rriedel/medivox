@@ -12,18 +12,19 @@ Hotkey **Control+Option+Leertaste** startet/stoppt die Aufnahme (Menueleisten-Ic
 waehrend der Aufnahme), die Aufnahme geht an die Engine und der erkannte Text wird ins
 fokussierte Fenster eingetippt.
 
-Der Shim nutzt dabei Pseudo-Streaming: waehrend der Aufnahme werden Audio-Chunks bereits
-laufend an die Engine geschickt. Beim Stoppen muss daher meist nur noch der Rest transkribiert
-werden, was die gefuehlte Wartezeit deutlich verkuerzt.
+Der Shim nutzt dabei Window-Streaming: waehrend der Aufnahme wird ein Ringpuffer gefuellt,
+und in regelmaessigen Ticks wird die Transkription auf einem konfigurierbaren Fenster der
+letzten Sekunden neu gestartet.
 
-Um Artefakte an Chunk-Grenzen zu reduzieren, wird zwischen aufeinanderfolgenden Chunks ein
-konfigurierbarer Audio-Overlap verwendet.
+Zur Stabilisierung werden Ergebnisse wortbasiert abgeglichen. Nur stabile Praefixe (mehrfach
+in Folge bestaetigt) werden final uebernommen; ein konfigurierbarer Holdback reduziert
+Fehler an Fenstergrenzen.
 
 Zum Qualitaetsvergleich kann Pseudo-Streaming komplett deaktiviert werden; dann wird wieder die
 gesamte Aufnahme erst beim Stop transkribiert.
 
-Wichtig fuer den geplanten Windows-Port: Die gesamte Engine-Ansteuerung (Pseudo-Streaming,
-Overlap, Min-Audio, Metrik-Logging, Chunk-Finalisierung) ist explizit im Modul
+Wichtig fuer den geplanten Windows-Port: Die gesamte Engine-Ansteuerung (Ringpuffer,
+Fenster-Re-Decode, Stabilisierung, Preview, Metrik-Logging) ist explizit im Modul
 `src/transcription_flow.rs` gebuendelt. `main.rs` enthaelt nur noch plattformspezifische
 Laufzeitlogik (Eventloop, Hotkey, Tray, Rechte).
 
@@ -74,12 +75,17 @@ Logs landen unter `~/Library/Logs/Medivox` (Praefix `shim-mac-`, taeglich rollie
 Env-Vars: `MEDIVOX_ENGINE_HOST` / `MEDIVOX_ENGINE_PORT` (Standard `127.0.0.1` / `8123`),
 `MEDIVOX_LOG_LEVEL` (Standard `info`), `MEDIVOX_HOTKEY` (Standard `Control+Alt+Space`;
 `MEDIVOX_PSEUDO_STREAMING` (Standard `true`, Werte z. B. `true/false`, `on/off`),
-`Alt` = Option-Taste), `MEDIVOX_STREAM_CHUNK_MS` (Standard `800`, Bereich `200..5000`),
-`MEDIVOX_STREAM_OVERLAP_MS` (Standard `250`, Bereich `0..2000`),
-`MEDIVOX_STREAM_MIN_AUDIO_MS` (Standard `2400`, Bereich `400..10000`).
+`Alt` = Option-Taste), `MEDIVOX_STREAM_TICK_MS` (Standard `1200`, Bereich `200..5000`),
+`MEDIVOX_STREAM_WINDOW_MS` (Standard `12000`, Bereich `2000..30000`),
+`MEDIVOX_STREAM_RING_BUFFER_MS` (Standard `20000`, Bereich `5000..60000`),
+`MEDIVOX_STREAM_MIN_TRANSCRIBE_MS` (Standard `3000`, Bereich `500..20000`),
+`MEDIVOX_STREAM_STABLE_PASSES` (Standard `2`, Bereich `1..6`),
+`MEDIVOX_STREAM_HOLDBACK_TOKENS` (Standard `4`, Bereich `0..20`),
+`MEDIVOX_STREAM_PREVIEW_ENABLED` (Standard `true`, Werte z. B. `true/false`, `on/off`).
 
 Der Shim loggt fuer jeden Engine-Request Metriken mit `transcribe_metrics`:
-`kind` (`chunk`, `final_tail`, `full`), `audio_s`, `elapsed_s`, `rtf`, `chars`.
+`kind` (`window`, `final_window`, `full`), `audio_s`, `elapsed_s`, `rtf`, `chars`.
+Das laufende, stabilisierte Zwischenresultat erscheint als `transcribe_preview`.
 
 ## Release-Build
 
@@ -128,7 +134,7 @@ unveraendert uebernommen.
 | Datei | Zweck | Herkunft |
 |---|---|---|
 | `main.rs` | Entry Point, tao-Eventloop, Aufnahme-/Transkriptions-Ablauf | macOS-spezifisch (Eventloop statt Win32-Message-Loop) |
-| `transcription_flow.rs` | Portierbare Engine-Ansteuerung inkl. Pseudo-Streaming + Metriken | plattformneutral, fuer Windows-Port vorgesehen |
+| `transcription_flow.rs` | Portierbare Engine-Ansteuerung (Ringpuffer, Stabilisierung, Preview, Metriken) | plattformneutral, fuer Windows-Port vorgesehen |
 | `recorder.rs` | CoreAudio-Aufnahme (`cpal`), Downmix + Resampling auf 16 kHz (`rubato`) | unveraendert von `shim-rust` |
 | `inject.rs` | `CGEventPost` fuer Unicode-Texteingabe (`core-graphics`) | macOS-spezifisch (Pendant zu SendInput) |
 | `tray.rs` | Menueleisten-Icon + Menue (`tray-icon`), Icons zur Laufzeit gezeichnet | unveraendert von `shim-rust` |

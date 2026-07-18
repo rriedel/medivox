@@ -1,6 +1,6 @@
-use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -9,52 +9,124 @@ use crate::client::EngineClient;
 use crate::config::SAMPLE_RATE;
 use crate::recorder::Recorder;
 
-struct StreamingSession {
-    chunk_interval: Duration,
-    min_chunk_samples: usize,
-    overlap_samples: usize,
-    overlap_tail: Vec<f32>,
-    pending_audio: Vec<f32>,
-    next_tick: Instant,
-    next_seq: u64,
-    in_flight: Arc<AtomicUsize>,
-    results: Arc<std::sync::Mutex<BTreeMap<u64, String>>>,
-}
-
-impl StreamingSession {
-    fn new(chunk_interval: Duration, min_chunk_samples: usize, overlap_samples: usize) -> Self {
-        Self {
-            chunk_interval,
-            min_chunk_samples,
-            overlap_samples,
-            overlap_tail: Vec::new(),
-            pending_audio: Vec::new(),
-            next_tick: Instant::now() + chunk_interval,
-            next_seq: 0,
-            in_flight: Arc::new(AtomicUsize::new(0)),
-            results: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
-        }
-    }
-}
-
 #[derive(Clone, Copy)]
 pub struct FlowConfig {
     pub pseudo_streaming_enabled: bool,
     pub chunk_interval: Duration,
-    pub min_chunk_samples: usize,
-    pub min_audio_ms: u64,
-    pub overlap_ms: u64,
-    pub overlap_samples: usize,
+    pub window_samples: usize,
+    pub ring_capacity_samples: usize,
+    pub min_transcribe_samples: usize,
+    pub stable_passes: usize,
+    pub holdback_tokens: usize,
+    pub preview_enabled: bool,
+}
+
+struct StabilizationState {
+    committed_raw: Vec<String>,
+    committed_norm: Vec<String>,
+    hypotheses: VecDeque<Hypothesis>,
+}
+
+struct Hypothesis {
+    raw: Vec<String>,
+    norm: Vec<String>,
+}
+
+impl StabilizationState {
+    fn new() -> Self {
+        Self {
+            committed_raw: Vec::new(),
+            committed_norm: Vec::new(),
+            hypotheses: VecDeque::new(),
+        }
+    }
+
+    fn push_hypothesis(&mut self, text: &str, stable_passes: usize, holdback_tokens: usize) {
+        let mut hyp = tokenize_words(text);
+        if hyp.raw.is_empty() {
+            return;
+        }
+
+        // Bereits finalisierte Tokens am Fensterrand nicht erneut verarbeiten.
+        let committed_overlap = max_overlap(&self.committed_norm, &hyp.norm);
+        if committed_overlap > 0 {
+            hyp.raw.drain(..committed_overlap);
+            hyp.norm.drain(..committed_overlap);
+        }
+        if hyp.raw.is_empty() {
+            return;
+        }
+
+        self.hypotheses.push_back(hyp);
+        while self.hypotheses.len() > stable_passes.max(1) {
+            self.hypotheses.pop_front();
+        }
+
+        let stable_prefix_len = longest_common_prefix_len_all(&self.hypotheses);
+        let commit_count = stable_prefix_len.saturating_sub(holdback_tokens);
+        if commit_count == 0 {
+            return;
+        }
+
+        if let Some(latest) = self.hypotheses.back() {
+            self.committed_raw
+                .extend(latest.raw.iter().take(commit_count).cloned());
+            self.committed_norm
+                .extend(latest.norm.iter().take(commit_count).cloned());
+        }
+
+        for hyp in &mut self.hypotheses {
+            let n = commit_count.min(hyp.raw.len());
+            hyp.raw.drain(..n);
+            hyp.norm.drain(..n);
+        }
+    }
+
+    fn preview_text(&self) -> String {
+        let mut out = String::new();
+        if !self.committed_raw.is_empty() {
+            out.push_str(&self.committed_raw.join(" "));
+        }
+        if let Some(latest) = self.hypotheses.back() {
+            if !latest.raw.is_empty() {
+                if !out.is_empty() {
+                    out.push(' ');
+                }
+                out.push_str(&latest.raw.join(" "));
+            }
+        }
+        out
+    }
+
+    fn finalize_text(&mut self) -> String {
+        if let Some(latest) = self.hypotheses.back() {
+            self.committed_raw.extend(latest.raw.clone());
+            self.committed_norm.extend(latest.norm.clone());
+        }
+        self.hypotheses.clear();
+        self.committed_raw.join(" ")
+    }
 }
 
 pub struct TranscriptionFlow {
     cfg: FlowConfig,
-    session: Option<StreamingSession>,
+    ring: VecDeque<f32>,
+    next_tick: Instant,
+    state: Arc<Mutex<StabilizationState>>,
+    in_flight: Arc<AtomicBool>,
+    seq: AtomicU64,
 }
 
 impl TranscriptionFlow {
     pub fn new(cfg: FlowConfig) -> Self {
-        Self { cfg, session: None }
+        Self {
+            cfg,
+            ring: VecDeque::new(),
+            next_tick: Instant::now() + cfg.chunk_interval,
+            state: Arc::new(Mutex::new(StabilizationState::new())),
+            in_flight: Arc::new(AtomicBool::new(false)),
+            seq: AtomicU64::new(0),
+        }
     }
 
     pub fn config(&self) -> FlowConfig {
@@ -65,22 +137,16 @@ impl TranscriptionFlow {
         if !recording || !self.cfg.pseudo_streaming_enabled {
             return None;
         }
-        if let Some(active) = &self.session {
-            Some(active.next_tick)
-        } else {
-            Some(Instant::now() + self.cfg.chunk_interval)
-        }
+        Some(self.next_tick)
     }
 
     pub fn on_recording_started(&mut self) {
-        if self.cfg.pseudo_streaming_enabled {
-            self.session = Some(StreamingSession::new(
-                self.cfg.chunk_interval,
-                self.cfg.min_chunk_samples,
-                self.cfg.overlap_samples,
-            ));
-        } else {
-            self.session = None;
+        self.ring.clear();
+        self.next_tick = Instant::now() + self.cfg.chunk_interval;
+        self.in_flight.store(false, Ordering::Release);
+        self.seq.store(0, Ordering::Release);
+        if let Ok(mut state) = self.state.lock() {
+            *state = StabilizationState::new();
         }
     }
 
@@ -89,15 +155,6 @@ impl TranscriptionFlow {
             return;
         }
 
-        let Some(active) = self.session.as_mut() else {
-            return;
-        };
-        let now = Instant::now();
-        if now < active.next_tick {
-            return;
-        }
-        active.next_tick = now + active.chunk_interval;
-
         let chunk = match recorder.drain_chunk() {
             Ok(chunk) => chunk,
             Err(err) => {
@@ -105,37 +162,30 @@ impl TranscriptionFlow {
                 return;
             }
         };
-        if chunk.is_empty() {
+        self.append_to_ring(&chunk);
+
+        let now = Instant::now();
+        if now < self.next_tick {
+            return;
+        }
+        self.next_tick = now + self.cfg.chunk_interval;
+
+        if self.in_flight.load(Ordering::Acquire) {
+            tracing::debug!("Transkription laeuft noch, Tick wird uebersprungen");
             return;
         }
 
-        active.pending_audio.extend_from_slice(&chunk);
-        if active.pending_audio.len() < active.min_chunk_samples {
+        let window = self.window_snapshot();
+        if window.len() < self.cfg.min_transcribe_samples {
             return;
         }
 
-        let ready_audio = std::mem::take(&mut active.pending_audio);
-
-        let mut chunk_for_transcription =
-            Vec::with_capacity(active.overlap_tail.len() + ready_audio.len());
-        chunk_for_transcription.extend_from_slice(&active.overlap_tail);
-        chunk_for_transcription.extend_from_slice(&ready_audio);
-
-        if active.overlap_samples == 0 {
-            active.overlap_tail.clear();
-        } else {
-            let tail_len = active.overlap_samples.min(ready_audio.len());
-            active.overlap_tail = ready_audio[ready_audio.len() - tail_len..].to_vec();
-        }
-
-        let seq = active.next_seq;
-        active.next_seq += 1;
-        spawn_chunk_transcription(
+        let seq = self.seq.fetch_add(1, Ordering::AcqRel);
+        self.spawn_window_transcription(
             Arc::clone(engine),
-            chunk_for_transcription,
+            window,
             seq,
-            Arc::clone(&active.in_flight),
-            Arc::clone(&active.results),
+            "window",
         );
     }
 
@@ -145,11 +195,18 @@ impl TranscriptionFlow {
         engine: Arc<EngineClient>,
         inject_text: fn(&str) -> Result<()>,
     ) {
-        let active_session = self.session.take();
-        let pseudo_active = self.cfg.pseudo_streaming_enabled;
+        self.append_to_ring(&tail_audio);
+        let final_window = self.window_snapshot();
+        let cfg = self.cfg;
+        let state = Arc::clone(&self.state);
+        let in_flight = Arc::clone(&self.in_flight);
 
         std::thread::spawn(move || {
-            if !pseudo_active {
+            while in_flight.load(Ordering::Acquire) {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+
+            if !cfg.pseudo_streaming_enabled {
                 let start = Instant::now();
                 let text = match engine.transcribe(&tail_audio) {
                     Ok(text) => {
@@ -180,100 +237,180 @@ impl TranscriptionFlow {
                 return;
             }
 
-            let mut merged = String::new();
-            let mut final_prefix: Vec<f32> = Vec::new();
-            let mut pending_audio: Vec<f32> = Vec::new();
-
-            if let Some(session) = active_session {
-                final_prefix = session.overlap_tail;
-                pending_audio = session.pending_audio;
-                while session.in_flight.load(Ordering::Acquire) > 0 {
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-
-                let mut ordered = session.results.lock().unwrap();
-                for text in ordered.values() {
-                    merged.push_str(text);
-                }
-                ordered.clear();
-            }
-
-            if !pending_audio.is_empty() || !tail_audio.is_empty() {
-                let mut final_audio =
-                    Vec::with_capacity(final_prefix.len() + pending_audio.len() + tail_audio.len());
-                final_audio.extend_from_slice(&final_prefix);
-                final_audio.extend_from_slice(&pending_audio);
-                final_audio.extend_from_slice(&tail_audio);
-
+            if final_window.len() >= cfg.min_transcribe_samples {
                 let start = Instant::now();
-                let tail_text = match engine.transcribe(&final_audio) {
+                match engine.transcribe(&final_window) {
                     Ok(text) => {
                         log_transcribe_metrics(
-                            "final_tail",
+                            "final_window",
                             None,
-                            final_audio.len(),
+                            final_window.len(),
                             start.elapsed(),
                             text.len(),
                         );
-                        text
+                        if let Ok(mut s) = state.lock() {
+                            s.push_hypothesis(&text, cfg.stable_passes, cfg.holdback_tokens);
+                        }
                     }
                     Err(err) => {
                         log_transcribe_error_metrics(
-                            "final_tail",
+                            "final_window",
                             None,
-                            final_audio.len(),
+                            final_window.len(),
                             start.elapsed(),
                             &format!("{err:#}"),
                         );
-                        tracing::error!("Finale Transkription fehlgeschlagen: {err:#}");
-                        return;
                     }
-                };
-                merged.push_str(&tail_text);
+                }
             }
 
-            let text = merged.trim().to_string();
-            tracing::info!("Transkriptionsergebnis: {text}");
-            if text.is_empty() {
+            let final_text = {
+                let mut s = state.lock().unwrap();
+                s.finalize_text()
+            };
+
+            tracing::info!("Transkriptionsergebnis: {final_text}");
+            if final_text.trim().is_empty() {
                 return;
             }
-            if let Err(err) = inject_text(&text) {
+            if let Err(err) = inject_text(final_text.trim()) {
                 tracing::error!("Texteingabe fehlgeschlagen: {err:#}");
             }
         });
     }
+
+    fn append_to_ring(&mut self, chunk: &[f32]) {
+        for &sample in chunk {
+            self.ring.push_back(sample);
+        }
+        while self.ring.len() > self.cfg.ring_capacity_samples {
+            self.ring.pop_front();
+        }
+    }
+
+    fn window_snapshot(&self) -> Vec<f32> {
+        let keep = self.cfg.window_samples.min(self.ring.len());
+        let start = self.ring.len().saturating_sub(keep);
+        self.ring.iter().skip(start).copied().collect()
+    }
+
+    fn spawn_window_transcription(
+        &self,
+        engine: Arc<EngineClient>,
+        audio: Vec<f32>,
+        seq: u64,
+        kind: &'static str,
+    ) {
+        if self
+            .in_flight
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+
+        let state = Arc::clone(&self.state);
+        let in_flight = Arc::clone(&self.in_flight);
+        let cfg = self.cfg;
+        std::thread::spawn(move || {
+            let start = Instant::now();
+            let result = engine.transcribe(&audio);
+            match result {
+                Ok(text) => {
+                    log_transcribe_metrics(kind, Some(seq), audio.len(), start.elapsed(), text.len());
+                    let preview = {
+                        let mut s = state.lock().unwrap();
+                        s.push_hypothesis(&text, cfg.stable_passes, cfg.holdback_tokens);
+                        s.preview_text()
+                    };
+                    if cfg.preview_enabled {
+                        let preview_compact = condense_whitespace(&preview);
+                        tracing::info!(
+                            seq = seq,
+                            preview_chars = preview_compact.len(),
+                            preview = truncate_preview(&preview_compact, 220),
+                            "transcribe_preview"
+                        );
+                    }
+                }
+                Err(err) => {
+                    log_transcribe_error_metrics(
+                        kind,
+                        Some(seq),
+                        audio.len(),
+                        start.elapsed(),
+                        &format!("{err:#}"),
+                    );
+                    tracing::warn!("Fenster-Transkription fehlgeschlagen (seq={seq}): {err:#}");
+                }
+            }
+            in_flight.store(false, Ordering::Release);
+        });
+    }
 }
 
-fn spawn_chunk_transcription(
-    engine: Arc<EngineClient>,
-    chunk: Vec<f32>,
-    seq: u64,
-    in_flight: Arc<AtomicUsize>,
-    results: Arc<std::sync::Mutex<BTreeMap<u64, String>>>,
-) {
-    in_flight.fetch_add(1, Ordering::AcqRel);
-    std::thread::spawn(move || {
-        let start = Instant::now();
-        let audio_samples = chunk.len();
-        let transcribed = engine.transcribe(&chunk);
-        if let Ok(text) = transcribed {
-            log_transcribe_metrics("chunk", Some(seq), audio_samples, start.elapsed(), text.len());
-            if !text.is_empty() {
-                let mut guard = results.lock().unwrap();
-                guard.insert(seq, text);
-            }
-        } else if let Err(err) = transcribed {
-            log_transcribe_error_metrics(
-                "chunk",
-                Some(seq),
-                audio_samples,
-                start.elapsed(),
-                &format!("{err:#}"),
-            );
-            tracing::warn!("Chunk-Transkription fehlgeschlagen (seq={seq}): {err:#}");
+fn tokenize_words(text: &str) -> Hypothesis {
+    let mut raw = Vec::new();
+    let mut norm = Vec::new();
+    for token in text.split_whitespace() {
+        let normalized = normalize_token(token);
+        if normalized.is_empty() {
+            continue;
         }
-        in_flight.fetch_sub(1, Ordering::AcqRel);
-    });
+        raw.push(token.to_string());
+        norm.push(normalized);
+    }
+    Hypothesis { raw, norm }
+}
+
+fn normalize_token(token: &str) -> String {
+    token
+        .trim_matches(|c: char| !c.is_alphanumeric() && c != '\'' && c != '-')
+        .to_lowercase()
+}
+
+fn max_overlap(committed: &[String], candidate: &[String]) -> usize {
+    let max = committed.len().min(candidate.len());
+    for overlap in (1..=max).rev() {
+        if committed[committed.len() - overlap..] == candidate[..overlap] {
+            return overlap;
+        }
+    }
+    0
+}
+
+fn longest_common_prefix_len(a: &[String], b: &[String]) -> usize {
+    let mut i = 0;
+    let max = a.len().min(b.len());
+    while i < max && a[i] == b[i] {
+        i += 1;
+    }
+    i
+}
+
+fn longest_common_prefix_len_all(hypotheses: &VecDeque<Hypothesis>) -> usize {
+    let Some(first) = hypotheses.front() else {
+        return 0;
+    };
+    hypotheses
+        .iter()
+        .skip(1)
+        .fold(first.norm.len(), |acc, hyp| {
+            acc.min(longest_common_prefix_len(&first.norm, &hyp.norm))
+        })
+}
+
+fn condense_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn truncate_preview(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(max_chars).collect();
+    out.push_str("...");
+    out
 }
 
 fn log_transcribe_metrics(
