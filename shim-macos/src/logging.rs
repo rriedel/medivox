@@ -31,13 +31,33 @@ pub fn configure() -> anyhow::Result<WorkerGuard> {
         .with_writer(writer)
         .with_ansi(false)
         .with_target(true)
+        .with_thread_ids(false)
+        .with_level(true)
         .init();
 
     Ok(guard)
 }
 
 fn config_level() -> String {
-    crate::config::log_level().to_lowercase()
+    // Lies RUST_LOG. Wenn nicht gesetzt, verwende Smart-Default:
+    // - Bei debug/trace: Nur medivox-Crates auf dieser Ebene, alles andere auf warn
+    // - Bei info/warn: Standard-Verhalten
+    if let Ok(env_log) = std::env::var("RUST_LOG") {
+        return env_log;
+    }
+    
+    let level = crate::config::log_level().to_lowercase();
+    match level.as_str() {
+        "debug" => {
+            // Nur der Shim selbst auf debug, externe Crates auf warn/error
+            "medivox_shim=debug,tao=warn,ureq=warn,objc2=warn,cpal=warn,info".to_string()
+        }
+        "trace" => {
+            // Trace nur für medivox, alles andere debug
+            "medivox_shim=trace,tao=debug,ureq=debug,objc2=debug,cpal=debug,info".to_string()
+        }
+        _ => "info".to_string(),
+    }
 }
 
 pub fn log_dir() -> PathBuf {

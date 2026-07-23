@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -47,11 +48,21 @@ impl StabilizationState {
             return;
         }
 
-        // Bereits finalisierte Tokens am Fensterrand nicht erneut verarbeiten.
-        let committed_overlap = max_overlap(&self.committed_norm, &hyp.norm);
-        if committed_overlap > 0 {
-            hyp.raw.drain(..committed_overlap);
-            hyp.norm.drain(..committed_overlap);
+        // Bereits finalisierte Tokens finden und herausschneiden.
+        // WICHTIG: Beim Sliding Window beginnt die neue Hypothesis VOR der committed-
+        // Frontier (das Fenster startet tick_ms früher als wo committed aufhört).
+        // Deshalb muss die committed-Grenze IRGENDWO IM INNEREN der Hypothesis
+        // gesucht werden – nicht nur am Anfang.
+        let skip = find_committed_frontier(&self.committed_norm, &hyp.norm);
+        if skip > 0 {
+            tracing::debug!(
+                committed_len = self.committed_norm.len(),
+                hyp_len = hyp.norm.len(),
+                skip,
+                "committed_frontier_found"
+            );
+            hyp.raw.drain(..skip);
+            hyp.norm.drain(..skip);
         }
         if hyp.raw.is_empty() {
             return;
@@ -115,6 +126,9 @@ pub struct TranscriptionFlow {
     state: Arc<Mutex<StabilizationState>>,
     in_flight: Arc<AtomicBool>,
     seq: AtomicU64,
+    save_audio: bool,
+    /// Optional: Kompletter Audio-Stream während der Aufnahme (für reproduzierbare Tests)
+    audio_history: Vec<f32>,
 }
 
 impl TranscriptionFlow {
@@ -126,6 +140,8 @@ impl TranscriptionFlow {
             state: Arc::new(Mutex::new(StabilizationState::new())),
             in_flight: Arc::new(AtomicBool::new(false)),
             seq: AtomicU64::new(0),
+            save_audio: crate::config::save_audio(),
+            audio_history: Vec::new(),
         }
     }
 
@@ -142,6 +158,7 @@ impl TranscriptionFlow {
 
     pub fn on_recording_started(&mut self) {
         self.ring.clear();
+        self.audio_history.clear();
         self.next_tick = Instant::now() + self.cfg.chunk_interval;
         self.in_flight.store(false, Ordering::Release);
         self.seq.store(0, Ordering::Release);
@@ -195,6 +212,11 @@ impl TranscriptionFlow {
         engine: Arc<EngineClient>,
         inject_text: fn(&str) -> Result<()>,
     ) {
+        // Speichere Audio, wenn konfiguriert
+        if let Err(err) = self.save_ring_to_wav() {
+            tracing::warn!("Audio konnte nicht gespeichert werden: {err:#}");
+        }
+
         self.append_to_ring(&tail_audio);
         let final_window = self.window_snapshot();
         let cfg = self.cfg;
@@ -282,6 +304,9 @@ impl TranscriptionFlow {
     fn append_to_ring(&mut self, chunk: &[f32]) {
         for &sample in chunk {
             self.ring.push_back(sample);
+            if self.save_audio {
+                self.audio_history.push(sample);
+            }
         }
         while self.ring.len() > self.cfg.ring_capacity_samples {
             self.ring.pop_front();
@@ -292,6 +317,105 @@ impl TranscriptionFlow {
         let keep = self.cfg.window_samples.min(self.ring.len());
         let start = self.ring.len().saturating_sub(keep);
         self.ring.iter().skip(start).copied().collect()
+    }
+
+    /// Lädt ein WAV-File und speist es mit Verzögerung (Echtzeit-Geschwindigkeit)
+    /// in den Ringpuffer ein. Für reproduzierbare Tests des Shim-Ablaufs.
+    ///
+    /// Dies ist hauptsächlich für Testzwecke gedacht, nicht für die normale Nutzung.
+    pub fn load_and_feed_wav(&mut self, wav_path: &std::path::Path) -> Result<()> {
+        use std::fs::File;
+
+        let file = File::open(wav_path)?;
+        let mut reader = hound::WavReader::new(file)?;
+
+        // Überprüfe Sample-Rate und Format
+        let spec = reader.spec();
+        if spec.channels != 1 {
+            anyhow::bail!("WAV muss mono sein, hat {} Kanäle", spec.channels);
+        }
+        if spec.sample_rate != SAMPLE_RATE {
+            anyhow::bail!(
+                "WAV muss {} Hz sein, hat {} Hz",
+                SAMPLE_RATE,
+                spec.sample_rate
+            );
+        }
+
+        let samples: Result<Vec<f32>, _> = reader
+            .samples::<f32>()
+            .map(|s| s.map_err(anyhow::Error::from))
+            .collect();
+        let samples = samples?;
+
+        tracing::info!(
+            wav_path = ?wav_path,
+            samples = samples.len(),
+            duration_s = format_args!("{:.2}", samples.len() as f64 / SAMPLE_RATE as f64),
+            "WAV geladen, speise nun in Echtzeit-Geschwindigkeit ein"
+        );
+
+        // Speise Samples in Echtzeit ein: 16000 Samples pro Sekunde ≈ ~0,3 ms pro Sample
+        let chunk_ms = 100; // Kleine Chunks, um Timing realistisch zu halten
+        let chunk_samples =
+            ((SAMPLE_RATE as u64 * chunk_ms) / 1000).max(1) as usize;
+        let delay_between_chunks = Duration::from_millis(chunk_ms);
+
+        for chunk in samples.chunks(chunk_samples) {
+            self.append_to_ring(chunk);
+            std::thread::sleep(delay_between_chunks);
+        }
+
+        tracing::info!("WAV vollständig eingefüttert");
+        Ok(())
+    }
+
+    fn save_ring_to_wav(&self) -> Result<()> {
+        if !self.save_audio {
+            return Ok(());
+        }
+
+        // Verwende komplette audio_history statt nur des Ringbuffer-Tails.
+        // So wird der gesamte aufgenommene Audio gespeichert, nicht nur die letzten
+        // 20s aus dem Ring.
+        if self.audio_history.is_empty() {
+            tracing::debug!("Audio-History ist leer, Audio wird nicht gespeichert");
+            return Ok(());
+        }
+
+        let output_dir = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()))
+            .join("Library")
+            .join("Logs")
+            .join("Medivox");
+        std::fs::create_dir_all(&output_dir)?;
+
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs();
+        let filename = output_dir.join(format!("medivox-recording-{}.wav", timestamp));
+
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: SAMPLE_RATE,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+
+        let mut writer = hound::WavWriter::create(&filename, spec)?;
+        for &sample in &self.audio_history {
+            writer.write_sample(sample)?;
+        }
+        writer.finalize()?;
+
+        let duration_s = self.audio_history.len() as f64 / SAMPLE_RATE as f64;
+        tracing::info!(
+            path = ?filename,
+            duration_s = format_args!("{:.2}", duration_s),
+            samples = self.audio_history.len(),
+            "Audio gespeichert (kompletter Stream)"
+        );
+
+        Ok(())
     }
 
     fn spawn_window_transcription(
@@ -369,13 +493,59 @@ fn normalize_token(token: &str) -> String {
         .to_lowercase()
 }
 
-fn max_overlap(committed: &[String], candidate: &[String]) -> usize {
-    let max = committed.len().min(candidate.len());
-    for overlap in (1..=max).rev() {
-        if committed[committed.len() - overlap..] == candidate[..overlap] {
-            return overlap;
+/// Gibt zurück, wie viele Tokens am Anfang von `candidate` übersprungen werden
+/// sollen, weil sie bereits durch `committed` abgedeckt sind.
+///
+/// Beim Sliding-Window beginnt jede neue Hypothesis **vor** der committed-Frontier
+/// (das Fenster reicht weiter zurück als der commit-Stand). Die committed-Tokens
+/// befinden sich daher irgendwo **im Inneren** von `candidate`, nicht am Anfang.
+/// Wir suchen deshalb nach einem Suffix von `committed` an beliebiger Stelle in
+/// `candidate` und liefern die Position unmittelbar danach zurück.
+fn find_committed_frontier(committed: &[String], candidate: &[String]) -> usize {
+    if committed.is_empty() || candidate.is_empty() {
+        return 0;
+    }
+
+    // Ankerlänge: Verwende bis zu 12 Tokens vom Ende von committed als Anker.
+    // Länger = sicherer gegen Falsch-Treffer, aber fehleranfälliger bei ASR-Fehlern.
+    let max_anchor = committed.len().min(12);
+    let min_anchor = 3.min(committed.len());
+
+    // Phase 1: Exakter Match – bevorzugt für fehlerfreie Transkriptionen.
+    for anchor_len in (min_anchor..=max_anchor).rev() {
+        let tail = &committed[committed.len() - anchor_len..];
+        let scan_end = candidate.len().saturating_sub(anchor_len);
+        for pos in 0..=scan_end {
+            if tail == &candidate[pos..pos + anchor_len] {
+                return pos + anchor_len;
+            }
         }
     }
+
+    // Phase 2: Fuzzy Match – toleriert kleine ASR-Fehler im Überlappbereich.
+    for anchor_len in (min_anchor.max(4)..=max_anchor).rev() {
+        let tail = &committed[committed.len() - anchor_len..];
+        let scan_end = candidate.len().saturating_sub(anchor_len);
+        // Bei längeren Ankern: etwas lockerer (mehr Fehler möglich), aber immer
+        // noch streng genug um Falsch-Treffer zu vermeiden.
+        let threshold: f32 = if anchor_len >= 8 { 0.75 } else { 0.80 };
+
+        for pos in 0..=scan_end {
+            let window = &candidate[pos..pos + anchor_len];
+            let matches = tail.iter().zip(window).filter(|(a, b)| a == b).count();
+            if matches as f32 / anchor_len as f32 >= threshold {
+                tracing::debug!(
+                    anchor_len,
+                    pos,
+                    matches,
+                    threshold,
+                    "fuzzy_frontier_found"
+                );
+                return pos + anchor_len;
+            }
+        }
+    }
+
     0
 }
 

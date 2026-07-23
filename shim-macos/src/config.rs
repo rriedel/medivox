@@ -175,3 +175,17 @@ pub fn stream_preview_enabled() -> bool {
 pub fn log_level() -> String {
     env::var("MEDIVOX_LOG_LEVEL").unwrap_or_else(|_| "info".to_string())
 }
+
+/// Liest MEDIVOX_SAVE_AUDIO.
+/// Akzeptiert: 1/0, true/false, on/off, yes/no.
+/// Wenn true, wird das aufgenommene Audio beim Stop als WAV gespeichert.
+pub fn save_audio() -> bool {
+    env::var("MEDIVOX_SAVE_AUDIO")
+        .ok()
+        .map(|v| match v.trim().to_lowercase().as_str() {
+            "0" | "false" | "off" | "no" => false,
+            "1" | "true" | "on" | "yes" => true,
+            _ => false,
+        })
+        .unwrap_or(false)
+}

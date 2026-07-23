@@ -100,6 +100,7 @@ fn run() -> Result<()> {
     } else {
         tracing::info!("Streaming deaktiviert: ganze Aufnahme wird am Ende transkribiert");
     }
+    tracing::info!("Save audio: {}", config::save_audio());
 
     let hotkey_rx = GlobalHotKeyEvent::receiver();
     let menu_rx = MenuEvent::receiver();
