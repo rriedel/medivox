@@ -10,10 +10,11 @@ class EngineConfig:
     cpu_threads: int = 8
     beam_size: int = 3
     best_of: int = 1
-    temperature: float = 0.0
-    without_timestamps: bool = True
+    temperature: tuple[float, ...] = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
+    repetition_penalty: float = 1.1
+    without_timestamps: bool = False
     condition_on_previous_text: bool = False
-    vad_filter: bool = False
+    vad_filter: bool = True
     vad_min_silence_duration_ms: int = 500
     language: str = "de"
     host: str = "127.0.0.1"
