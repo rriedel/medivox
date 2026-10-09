@@ -32,6 +32,18 @@ FastAPI-Server, hoert standardmaessig auf `127.0.0.1:8123` (siehe
 
 Alle Befehle werden aus dem Verzeichnis `engine/` ausgefuehrt.
 
+Mit [`uv`](https://docs.astral.sh/uv/) (Quelle der Wahrheit fuer Deployment,
+`pyproject.toml` + `uv.lock`):
+
+```powershell
+cd engine
+uv sync                          # venv + Python + Abhaengigkeiten
+uv run medivox-engine            # Server starten
+uv run mypy --config-file mypy.ini
+```
+
+Alternativ klassisch mit venv + pip:
+
 ```powershell
 cd engine
 
@@ -54,6 +66,23 @@ Endpunkte:
 
 - `POST /transcribe` -- Body: rohe `float32`-PCM-Samples (16 kHz, mono). Antwort: erkannter Text als Plaintext.
 - `POST /reload-glossary` -- laedt `glossary.txt` neu ein, ohne den Server neu zu starten.
+
+Konfiguration per Umgebungsvariable (ueberschreibt die Defaults in
+[`config.py`](engine/medivox_engine/config.py)): `MEDIVOX_HOST`, `MEDIVOX_PORT`,
+`MEDIVOX_MODEL_SIZE`, `MEDIVOX_DEVICE`, `MEDIVOX_COMPUTE_TYPE`,
+`MEDIVOX_CPU_THREADS`, `MEDIVOX_LOG_LEVEL`.
+
+### Deployment
+
+Zentraler Betrieb auf einem Server (ohne Docker), Verteilung per `uv` inkl.
+eigenstaendigem Python -- siehe [`engine/deploy/README.md`](engine/deploy/README.md).
+
+```powershell
+cd engine
+uv sync --frozen --no-dev
+$env:MEDIVOX_HOST = "0.0.0.0"
+.venv\Scripts\python.exe -m medivox_engine.main
+```
 
 ### Performance-Tuning (CPU)
 
